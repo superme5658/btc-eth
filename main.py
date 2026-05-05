@@ -1,24 +1,24 @@
 import os
 import requests
-import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
+from okx import MarketData
 
 load_dotenv()
 
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 
+# 币种配置（OKX 交易对）
 CRYPTO = {
-    "BTC-USD": "比特币",
-    "ETH-USD": "以太坊"
+    "BTC-USDT": "比特币",
+    "ETH-USDT": "以太坊"
 }
 
 # ========== 技术指标函数 ==========
 
 def calculate_adx(high, low, close, period=14):
-    """计算 ADX 指标"""
     high = np.array(high)
     low = np.array(low)
     close = np.array(close)
@@ -50,23 +50,17 @@ def calculate_adx(high, low, close, period=14):
     return plus_di, minus_di, adx
 
 def calculate_rsi(close, period=14):
-    """计算 RSI 指标"""
     close_series = pd.Series(close)
     delta = close_series.diff()
-    
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
-    
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
-    
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    
     return rsi.iloc[-1]
 
 def calculate_bollinger_width(close, period=20, std_dev=2):
-    """计算布林带宽度百分比"""
     close_series = pd.Series(close)
     ma = close_series.rolling(window=period).mean()
     std = close_series.rolling(window=period).std()
@@ -76,7 +70,6 @@ def calculate_bollinger_width(close, period=20, std_dev=2):
     return width.iloc[-1]
 
 def calculate_macd(close, fast=12, slow=26, signal=9):
-    """计算 MACD 柱状图值"""
     close_series = pd.Series(close)
     ema_fast = close_series.ewm(span=fast, adjust=False).mean()
     ema_slow = close_series.ewm(span=slow, adjust=False).mean()
@@ -85,131 +78,96 @@ def calculate_macd(close, fast=12, slow=26, signal=9):
     histogram = macd_line - signal_line
     return histogram.iloc[-1]
 
-# ========== 斐波那契函数 (修复版) ==========
+# ========== 斐波那契函数 ==========
 
 def find_swing_points(high, low, lookback=30):
-    """找到近期波段高点和低点（使用 numpy 操作，修复 index 错误）"""
     n = len(high)
     if n < lookback:
-        lookback = n // 2 if n > 2 else n
-    
-    # 取最近 lookback 天的数据
+        lookback = max(2, n // 2)
     recent_high = high[-lookback:]
     recent_low = low[-lookback:]
-    
-    # 最高价和最低价
     swing_high = np.max(recent_high)
     swing_low = np.min(recent_low)
-    
-    # 找到它们的索引（相对于原数组的全局索引）
-    # 注意：可能有多个相同值，取第一个出现的位置
     high_indices = np.where(high == swing_high)[0]
     low_indices = np.where(low == swing_low)[0]
-    
-    # 选择在 lookback 范围内的最近一个
     high_idx_in_range = [idx for idx in high_indices if idx >= n - lookback]
     low_idx_in_range = [idx for idx in low_indices if idx >= n - lookback]
-    
     high_idx = high_idx_in_range[0] if high_idx_in_range else n - 1
     low_idx = low_idx_in_range[0] if low_idx_in_range else n - 1
-    
-    # 判断趋势方向：高点出现在低点之后为上升趋势
     is_uptrend = high_idx > low_idx
-    
     return swing_high, swing_low, is_uptrend
 
 def calculate_fibonacci_levels(high, low, lookback=30):
-    """计算斐波那契回撤/反弹位"""
     swing_high, swing_low, is_uptrend = find_swing_points(high, low, lookback)
-    
     fib_levels = {}
     ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
     names = ["0%", "23.6%", "38.2%", "50%", "61.8%", "78.6%", "100%"]
-    
     if is_uptrend:
-        # 上升趋势：回撤位
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
-            level = swing_high - diff * ratio
-            fib_levels[name] = round(level, 2)
+            fib_levels[name] = round(swing_high - diff * ratio, 2)
         fib_type = "📈 斐波那契回撤位 (上升趋势)"
     else:
-        # 下降趋势：反弹位
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
-            level = swing_low + diff * ratio
-            fib_levels[name] = round(level, 2)
+            fib_levels[name] = round(swing_low + diff * ratio, 2)
         fib_type = "📉 斐波那契反弹位 (下降趋势)"
-    
     return fib_levels, fib_type, swing_high, swing_low
 
 def get_price_position_relative_to_fib(current_price, fib_levels):
-    """判断当前价格位于斐波那契的哪个区间"""
-    # 获取排序后的 (百分比, 价格) 列表
     items = [(float(level.split('%')[0]), price) for level, price in fib_levels.items()]
-    items.sort(key=lambda x: x[1])  # 按价格升序
-    
+    items.sort(key=lambda x: x[1])
     for i, (ratio, price) in enumerate(items):
         if current_price < price:
             if i == 0:
                 return f"🔻 低于 {items[0][0]}% 支撑位", "极端低位，强支撑区域"
             prev_ratio, prev_price = items[i-1]
-            # 判断更靠近哪一个
             if abs(current_price - prev_price) < abs(current_price - price):
                 return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {prev_ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
             else:
                 return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
-    
-    # 高于所有
     return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
-# ========== 数据获取 ==========
+# ========== OKX 数据获取 ==========
 
 def get_crypto_data(symbol, days=60):
-    """获取加密货币数据及所有技术指标"""
     try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=f"{days}d")
-        
-        if hist.empty or len(hist) < 30:
+        market_api = MarketData.MarketAPI(flag="0", debug=False)
+        result = market_api.get_candlesticks(instId=symbol, bar='1D', limit=300)
+        if result['code'] != '0':
+            print(f"OKX API 错误: {result['msg']}")
             return None
+        data = result['data']
+        if not data:
+            return None
+        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'vol',
+                                         'volCcy', 'volCcyQuote', 'confirm'])
+        for col in ['open', 'high', 'low', 'close', 'vol']:
+            df[col] = df[col].astype(float)
+        df = df.iloc[::-1].reset_index(drop=True)
+        if len(df) > days + 10:
+            df = df.tail(days + 10)
         
-        current = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2] if len(hist) >= 2 else current
+        current = df['close'].iloc[-1]
+        prev_close = df['close'].iloc[-2] if len(df) >= 2 else current
         change_pct = ((current - prev_close) / prev_close) * 100
         
-        # ADX
-        _, _, adx = calculate_adx(
-            hist['High'].values, 
-            hist['Low'].values, 
-            hist['Close'].values,
-            period=14
-        )
+        _, _, adx = calculate_adx(df['high'].values, df['low'].values, df['close'].values, period=14)
         current_adx = adx[-1] if len(adx) > 0 else 0
         
-        # RSI
-        current_rsi = calculate_rsi(hist['Close'].values, period=14)
+        current_rsi = calculate_rsi(df['close'].values, period=14)
+        bb_width = calculate_bollinger_width(df['close'].values, period=20)
+        macd_hist = calculate_macd(df['close'].values)
         
-        # 布林带宽度
-        bb_width = calculate_bollinger_width(hist['Close'].values, period=20)
+        ma20 = df['close'].tail(20).mean()
+        ma60 = df['close'].tail(60).mean()
         
-        # MACD
-        macd_hist = calculate_macd(hist['Close'].values)
-        
-        # 均线
-        ma20 = hist['Close'].tail(20).mean()
-        ma60 = hist['Close'].tail(60).mean()
-        
-        # 成交量
-        vol_avg = hist['Volume'].tail(20).mean()
-        vol_current = hist['Volume'].iloc[-1]
+        vol_avg = df['vol'].tail(20).mean()
+        vol_current = df['vol'].iloc[-1]
         vol_ratio = vol_current / vol_avg if vol_avg > 0 else 1
         
-        # 斐波那契
         fib_levels, fib_type, swing_high, swing_low = calculate_fibonacci_levels(
-            hist['High'].values, 
-            hist['Low'].values, 
-            lookback=30
+            df['high'].values, df['low'].values, lookback=30
         )
         fib_position, fib_advice = get_price_position_relative_to_fib(current, fib_levels)
         
@@ -237,7 +195,7 @@ def get_crypto_data(symbol, days=60):
         print(f"获取 {symbol} 数据失败: {e}")
         return None
 
-# ========== 指标判断函数 ==========
+# ========== 指标判断与综合建议 ==========
 
 def judge_bb_width_status(width):
     if width < 5:
@@ -251,15 +209,9 @@ def judge_bb_width_status(width):
 
 def judge_macd_status(macd_hist):
     if macd_hist > 0:
-        if macd_hist > 100:
-            return "🟢 强劲多头动能"
-        else:
-            return "📗 多头动能"
+        return "🟢 强劲多头动能" if macd_hist > 100 else "📗 多头动能"
     else:
-        if macd_hist < -100:
-            return "🔴 强劲空头动能"
-        else:
-            return "📘 空头动能"
+        return "🔴 强劲空头动能" if macd_hist < -100 else "📘 空头动能"
 
 def judge_rsi_status(rsi):
     if rsi >= 70:
@@ -272,96 +224,82 @@ def judge_rsi_status(rsi):
         return "📘 弱势区", "空头占优"
 
 def generate_action_advice(data):
-    """基于全部指标生成操作建议（加入斐波那契判断）"""
     adx = data['adx']
     rsi = data['rsi']
     bb_width = data['bb_width']
     macd_hist = data['macd_hist']
     price = data['current']
+    fib_618 = data['fib_levels'].get("61.8%")
+    fib_382 = data['fib_levels'].get("38.2%")
     
-    # 获取斐波那契关键位
-    fib_levels = data['fib_levels']
-    fib_618 = fib_levels.get("61.8%", None)
-    fib_382 = fib_levels.get("38.2%", None)
+    bullish = 0
+    bearish = 0
+    signals = []
     
-    # 收集信号
-    bullish_signals = 0
-    bearish_signals = 0
-    signal_list = []
-    
-    # ADX + 方向
     if adx > 25 and data['price_above_ma20'] and data['price_above_ma60']:
-        bullish_signals += 2
-        signal_list.append("趋势多头")
+        bullish += 2
+        signals.append("趋势多头")
     elif adx > 25 and not data['price_above_ma20']:
-        bearish_signals += 2
-        signal_list.append("趋势空头")
+        bearish += 2
+        signals.append("趋势空头")
     elif adx < 20:
-        signal_list.append("震荡")
+        signals.append("震荡")
     
-    # RSI
     if rsi < 30:
-        bullish_signals += 1
-        signal_list.append("超卖")
+        bullish += 1
+        signals.append("超卖")
     elif rsi > 70:
-        bearish_signals += 1
-        signal_list.append("超买")
+        bearish += 1
+        signals.append("超买")
     
-    # MACD
     if macd_hist > 0:
-        bullish_signals += 1
-        signal_list.append("MACD+")
+        bullish += 1
+        signals.append("MACD+")
     else:
-        bearish_signals += 1
-        signal_list.append("MACD-")
+        bearish += 1
+        signals.append("MACD-")
     
-    # 斐波那契支撑/阻力
     if fib_618 and price <= fib_618:
-        bullish_signals += 1
-        signal_list.append("接近斐波那契支撑")
+        bullish += 1
+        signals.append("接近斐波那契支撑")
     if fib_382 and price >= fib_382 and adx > 25:
-        bearish_signals += 1
-        signal_list.append("接近斐波那契阻力")
+        bearish += 1
+        signals.append("接近斐波那契阻力")
     
-    # 布林带变盘预警
     if bb_width < 5:
-        signal_list.append("变盘预警")
+        signals.append("变盘预警")
     
-    # 综合判断
-    signal_summary = " | ".join(signal_list)
+    signal_summary = " | ".join(signals)
     
-    if bullish_signals >= 3:
+    if bullish >= 3:
         return f"✅ 强烈做多 ({signal_summary})", "顺势持仓，回调至斐波那契支撑位加仓"
-    elif bearish_signals >= 3:
+    if bearish >= 3:
         return f"❌ 强烈做空 ({signal_summary})", "顺势做空，反弹至斐波那契阻力位加仓"
-    elif bullish_signals >= 2:
+    if bullish >= 2:
         return f"📈 偏多 ({signal_summary})", "轻仓试多，设好止损"
-    elif bearish_signals >= 2:
+    if bearish >= 2:
         return f"📉 偏空 ({signal_summary})", "轻仓试空，设好止损"
-    elif bb_width < 5:
+    if bb_width < 5:
         return f"⚡ 变盘预警 ({signal_summary})", "减小仓位，等待方向明确"
-    else:
-        return f"➡️ 观望 ({signal_summary})", "多空信号不明确，等待共振"
+    return f"➡️ 观望 ({signal_summary})", "多空信号不明确，等待共振"
 
-# ========== 主函数 ==========
+# ========== 飞书推送 ==========
 
 def send_to_feishu(message):
     if not FEISHU_WEBHOOK:
         print("未配置飞书 Webhook")
         return
-    
     payload = {
         "msg_type": "post",
         "content": {
             "post": {
                 "zh_cn": {
-                    "title": f"📊 加密货币技术分析 | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    "title": f"📊 加密货币技术分析 (OKX数据) | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "content": [[{"tag": "text", "text": message}]]
                 }
             }
         }
     }
-    
     try:
         resp = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
         if resp.status_code == 200:
@@ -372,22 +310,18 @@ def send_to_feishu(message):
         print(f"推送异常: {e}")
 
 def format_fib_levels(fib_levels):
-    """格式化斐波那契水平显示"""
-    lines = []
-    for name, price in fib_levels.items():
-        lines.append(f"  {name}: ${price:,.0f}")
-    return "\n".join(lines)
+    return "\n".join([f"  {k}: ${v:,.0f}" for k, v in fib_levels.items()])
+
+# ========== 主函数 ==========
 
 def main():
     print(f"执行时间: {datetime.now()}")
     report_lines = []
-    
     for symbol, name in CRYPTO.items():
-        data = get_crypto_data(symbol)
+        data = get_crypto_data(symbol, days=60)
         if not data:
             report_lines.append(f"\n❌ 【{name}】数据获取失败")
             continue
-        
         rsi_status, rsi_advice = judge_rsi_status(data['rsi'])
         bb_status, bb_advice = judge_bb_width_status(data['bb_width'])
         macd_status = judge_macd_status(data['macd_hist'])
@@ -395,7 +329,7 @@ def main():
         
         line = f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 {name} | {symbol.replace('-USD', '')}
+📌 {name} | {symbol}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💰 现价: ${data['current']:,.0f}  |  {data['change_pct']:+.2f}%
 
@@ -421,7 +355,6 @@ def main():
 """
         report_lines.append(line)
         print(line)
-    
     full_report = "".join(report_lines)
     send_to_feishu(full_report)
 
