@@ -3,7 +3,7 @@ import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -85,50 +85,56 @@ def calculate_macd(close, fast=12, slow=26, signal=9):
     histogram = macd_line - signal_line
     return histogram.iloc[-1]
 
-# ========== 斐波那契函数 ==========
+# ========== 斐波那契函数 (修复版) ==========
 
 def find_swing_points(high, low, lookback=30):
-    """找到近期波段高点和低点（简化方法：找窗口内最高/最低）"""
+    """找到近期波段高点和低点（使用 numpy 操作，修复 index 错误）"""
     n = len(high)
     if n < lookback:
-        lookback = n // 2
+        lookback = n // 2 if n > 2 else n
     
-    # 找区间内的最高价和最低价
-    recent_high = max(high[-lookback:])
-    recent_low = min(low[-lookback:])
+    # 取最近 lookback 天的数据
+    recent_high = high[-lookback:]
+    recent_low = low[-lookback:]
     
-    # 找对应的位置索引
-    high_idx = high[-lookback:].index(recent_high) if recent_high in high[-lookback:] else -1
-    low_idx = low[-lookback:].index(recent_low) if recent_low in low[-lookback:] else -1
+    # 最高价和最低价
+    swing_high = np.max(recent_high)
+    swing_low = np.min(recent_low)
     
-    # 判断趋势方向：如果高点出现在低点之后，视为上升趋势
-    is_uptrend = high_idx > low_idx if high_idx != -1 and low_idx != -1 else True
+    # 找到它们的索引（相对于原数组的全局索引）
+    # 注意：可能有多个相同值，取第一个出现的位置
+    high_indices = np.where(high == swing_high)[0]
+    low_indices = np.where(low == swing_low)[0]
     
-    return recent_high, recent_low, is_uptrend
+    # 选择在 lookback 范围内的最近一个
+    high_idx_in_range = [idx for idx in high_indices if idx >= n - lookback]
+    low_idx_in_range = [idx for idx in low_indices if idx >= n - lookback]
+    
+    high_idx = high_idx_in_range[0] if high_idx_in_range else n - 1
+    low_idx = low_idx_in_range[0] if low_idx_in_range else n - 1
+    
+    # 判断趋势方向：高点出现在低点之后为上升趋势
+    is_uptrend = high_idx > low_idx
+    
+    return swing_high, swing_low, is_uptrend
 
 def calculate_fibonacci_levels(high, low, lookback=30):
-    """
-    计算斐波那契回撤/扩展位
-    上升趋势：从低点到高点画斐波那契
-    下降趋势：从高点到低点画斐波那契
-    """
+    """计算斐波那契回撤/反弹位"""
     swing_high, swing_low, is_uptrend = find_swing_points(high, low, lookback)
     
     fib_levels = {}
-    
-    # 斐波那契比例
     ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
     names = ["0%", "23.6%", "38.2%", "50%", "61.8%", "78.6%", "100%"]
     
     if is_uptrend:
-        # 上升趋势：计算回撤位（从高点到低点）
+        # 上升趋势：回撤位
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
             level = swing_high - diff * ratio
             fib_levels[name] = round(level, 2)
         fib_type = "📈 斐波那契回撤位 (上升趋势)"
     else:
-        # 下降趋势：计算反弹位（从低点到高点）
+        # 下降趋势：反弹位
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
             level = swing_low + diff * ratio
@@ -139,28 +145,23 @@ def calculate_fibonacci_levels(high, low, lookback=30):
 
 def get_price_position_relative_to_fib(current_price, fib_levels):
     """判断当前价格位于斐波那契的哪个区间"""
-    # 获取关键位列表
-    levels = [(float(level.split('%')[0]), price) for level, price in fib_levels.items()]
-    levels.sort(key=lambda x: x[1])  # 按价格排序
+    # 获取排序后的 (百分比, 价格) 列表
+    items = [(float(level.split('%')[0]), price) for level, price in fib_levels.items()]
+    items.sort(key=lambda x: x[1])  # 按价格升序
     
-    for i, (ratio, price) in enumerate(levels):
+    for i, (ratio, price) in enumerate(items):
         if current_price < price:
             if i == 0:
-                return f"🔻 低于 {levels[0][0]}% 支撑位", "极端低位，强支撑区域"
-            elif i == len(levels) - 1:
-                return f"🔺 高于 {levels[-1][0]}% 阻力位", "极端高位，强阻力区域"
+                return f"🔻 低于 {items[0][0]}% 支撑位", "极端低位，强支撑区域"
+            prev_ratio, prev_price = items[i-1]
+            # 判断更靠近哪一个
+            if abs(current_price - prev_price) < abs(current_price - price):
+                return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {prev_ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
             else:
-                prev_ratio, prev_price = levels[i-1]
-                # 判断更靠近哪一个
-                dist_to_prev = abs(current_price - prev_price)
-                dist_to_curr = abs(current_price - price)
-                if dist_to_prev < dist_to_curr:
-                    return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {prev_ratio}%", f"支撑/阻力参考: {prev_price} - {price}"
-                else:
-                    return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price} - {price}"
+                return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
     
-    # 理论不会走到这里
-    return "📍 位于所有斐波那契位之上/下", "注意极端行情"
+    # 高于所有
+    return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
 # ========== 数据获取 ==========
 
@@ -276,7 +277,6 @@ def generate_action_advice(data):
     rsi = data['rsi']
     bb_width = data['bb_width']
     macd_hist = data['macd_hist']
-    fib_position = data['fib_position']
     price = data['current']
     
     # 获取斐波那契关键位
