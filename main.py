@@ -128,11 +128,13 @@ def get_price_position_relative_to_fib(current_price, fib_levels):
                 return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
     return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
-# ========== OKX 数据获取 ==========
+# ========== OKX 数据获取（日线 + 实时价格） ==========
 
 def get_crypto_data(symbol, days=60):
     try:
         market_api = MarketData.MarketAPI(flag="0", debug=False)
+        
+        # 1. 获取日线 K 线（用于指标计算）
         result = market_api.get_candlesticks(instId=symbol, bar='1D', limit=300)
         if result['code'] != '0':
             print(f"OKX API 错误: {result['msg']}")
@@ -140,6 +142,7 @@ def get_crypto_data(symbol, days=60):
         data = result['data']
         if not data:
             return None
+        
         df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'vol',
                                          'volCcy', 'volCcyQuote', 'confirm'])
         for col in ['open', 'high', 'low', 'close', 'vol']:
@@ -148,10 +151,20 @@ def get_crypto_data(symbol, days=60):
         if len(df) > days + 10:
             df = df.tail(days + 10)
         
-        current = df['close'].iloc[-1]
-        prev_close = df['close'].iloc[-2] if len(df) >= 2 else current
-        change_pct = ((current - prev_close) / prev_close) * 100
+        # 2. 获取实时 Ticker（最新价和 24h 涨跌幅）
+        ticker_result = market_api.get_ticker(instId=symbol)
+        if ticker_result['code'] != '0':
+            print(f"获取实时价格失败: {ticker_result['msg']}")
+            # 回退到日线收盘价
+            current = df['close'].iloc[-1]
+            change_pct = 0.0
+        else:
+            ticker = ticker_result['data'][0]
+            current = float(ticker['last'])
+            # OKX 的 ticker 中 'changepct' 字段是百分比，例如 "1.23" 表示涨 1.23%
+            change_pct = float(ticker.get('changepct', 0))
         
+        # 计算技术指标（基于日线）
         _, _, adx = calculate_adx(df['high'].values, df['low'].values, df['close'].values, period=14)
         current_adx = adx[-1] if len(adx) > 0 else 0
         
@@ -166,6 +179,7 @@ def get_crypto_data(symbol, days=60):
         vol_current = df['vol'].iloc[-1]
         vol_ratio = vol_current / vol_avg if vol_avg > 0 else 1
         
+        # 斐波那契
         fib_levels, fib_type, swing_high, swing_low = calculate_fibonacci_levels(
             df['high'].values, df['low'].values, lookback=30
         )
