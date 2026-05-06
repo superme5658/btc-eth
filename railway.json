@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "schedule": "30 0,11 * * *",
+      "command": "python main.py"
+    }
+  ]
+}
