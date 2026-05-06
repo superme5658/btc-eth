@@ -172,7 +172,8 @@ def get_crypto_data(symbol, days=60):
         else:
             ticker = ticker_result['data'][0]
             current = float(ticker['last'])
-            change_pct = float(ticker['changepct'])
+            # 注意：字段名是 'changePct'（大写 P）
+            change_pct = float(ticker.get('changePct', 0))
         
         # 计算技术指标（基于日线）
         _, _, adx = calculate_adx(df['high'].values, df['low'].values, df['close'].values, period=14)
