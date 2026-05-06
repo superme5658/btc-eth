@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
-from okx import MarketData
+from okx import MarketAPI
 
 load_dotenv()
 
@@ -132,10 +132,18 @@ def get_price_position_relative_to_fib(current_price, fib_levels):
 
 def get_crypto_data(symbol, days=60):
     try:
-        market_api = MarketData.MarketAPI(flag="0", debug=False)
+        # 初始化 OKX 行情 API（修改后的正确用法）
+        market_api = MarketAPI(
+            flag="0",           # 0: 生产环境, 1: 模拟环境
+            debug=False
+        )
         
         # 1. 获取日线 K 线（用于指标计算）
-        result = market_api.get_candlesticks(instId=symbol, bar='1D', limit=300)
+        result = market_api.get_candlesticks(
+            instId=symbol,
+            bar='1D',
+            limit=300
+        )
         if result['code'] != '0':
             print(f"OKX API 错误: {result['msg']}")
             return None
