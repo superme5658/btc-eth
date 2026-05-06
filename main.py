@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
-from okx import MarketData   # ← 改回 MarketData
 
 load_dotenv()
 
@@ -128,49 +127,52 @@ def get_price_position_relative_to_fib(current_price, fib_levels):
                 return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
     return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
-# ========== OKX 数据获取（日线 + 实时价格） ==========
+# ========== OKX 数据获取（使用 requests 直接调用 API） ==========
 
 def get_crypto_data(symbol, days=60):
+    """
+    使用 requests 直接调用 OKX 公开 API
+    symbol 格式: 'BTC-USDT' 或 'ETH-USDT'
+    """
     try:
-        # 初始化 OKX 行情 API（修正后的正确用法）
-        market_api = MarketData.MarketAPI(   # ← 改回 MarketData.MarketAPI
-            flag="0",           # 0: 生产环境, 1: 模拟环境
-            debug=False
-        )
+        # 1. 获取日线 K 线数据
+        params = {
+            'instId': symbol,
+            'bar': '1D',
+            'limit': '300'
+        }
+        response = requests.get('https://www.okx.com/api/v5/market/history-candles', params=params)
+        result = response.json()
         
-        # 1. 获取日线 K 线（用于指标计算）
-        result = market_api.get_candlesticks(
-            instId=symbol,
-            bar='1D',
-            limit=300
-        )
         if result['code'] != '0':
             print(f"OKX API 错误: {result['msg']}")
             return None
+        
         data = result['data']
         if not data:
             return None
+        
+        # 数据格式: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+        # 注意：返回的是倒序（最新在前），需要反转
+        data.reverse()
         
         df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'vol',
                                          'volCcy', 'volCcyQuote', 'confirm'])
         for col in ['open', 'high', 'low', 'close', 'vol']:
             df[col] = df[col].astype(float)
-        df = df.iloc[::-1].reset_index(drop=True)
-        if len(df) > days + 10:
-            df = df.tail(days + 10)
         
         # 2. 获取实时 Ticker（最新价和 24h 涨跌幅）
-        ticker_result = market_api.get_ticker(instId=symbol)
+        ticker_response = requests.get('https://www.okx.com/api/v5/market/ticker', params={'instId': symbol})
+        ticker_result = ticker_response.json()
+        
         if ticker_result['code'] != '0':
             print(f"获取实时价格失败: {ticker_result['msg']}")
-            # 回退到日线收盘价
             current = df['close'].iloc[-1]
             change_pct = 0.0
         else:
             ticker = ticker_result['data'][0]
             current = float(ticker['last'])
-            # OKX 的 ticker 中 'changepct' 字段是百分比，例如 "1.23" 表示涨 1.23%
-            change_pct = float(ticker.get('changepct', 0))
+            change_pct = float(ticker['changepct'])
         
         # 计算技术指标（基于日线）
         _, _, adx = calculate_adx(df['high'].values, df['low'].values, df['close'].values, period=14)
