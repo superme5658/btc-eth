@@ -48,7 +48,8 @@ def calculate_adx(high, low, close, period=14):
     
     return plus_di, minus_di, adx
 
-def calculate_rsi(close, period=14):
+def calculate_rsi_series(close, period=14):
+    """返回完整的 RSI 序列"""
     close_series = pd.Series(close)
     delta = close_series.diff()
     gain = delta.where(delta > 0, 0)
@@ -57,7 +58,17 @@ def calculate_rsi(close, period=14):
     avg_loss = loss.rolling(window=period).mean()
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
+    return rsi.values
+
+def calculate_macd_series(close, fast=12, slow=26, signal=9):
+    """返回 MACD 柱状图（histogram）完整序列"""
+    close_series = pd.Series(close)
+    ema_fast = close_series.ewm(span=fast, adjust=False).mean()
+    ema_slow = close_series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return histogram.values
 
 def calculate_bollinger_width(close, period=20, std_dev=2):
     close_series = pd.Series(close)
@@ -68,14 +79,95 @@ def calculate_bollinger_width(close, period=20, std_dev=2):
     width = (upper - lower) / ma * 100
     return width.iloc[-1]
 
-def calculate_macd(close, fast=12, slow=26, signal=9):
-    close_series = pd.Series(close)
-    ema_fast = close_series.ewm(span=fast, adjust=False).mean()
-    ema_slow = close_series.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return histogram.iloc[-1]
+# ========== 背离检测函数 ==========
+
+def find_peaks(series, order=2):
+    """
+    简单寻找局部极值点
+    series: 一维数组
+    order: 左右各 order 个点进行比较
+    返回 (峰值索引列表, 谷值索引列表)
+    """
+    peaks = []
+    troughs = []
+    n = len(series)
+    for i in range(order, n - order):
+        # 局部峰值
+        if all(series[i] >= series[i-j] for j in range(1, order+1)) and \
+           all(series[i] >= series[i+j] for j in range(1, order+1)):
+            peaks.append(i)
+        # 局部谷值
+        if all(series[i] <= series[i-j] for j in range(1, order+1)) and \
+           all(series[i] <= series[i+j] for j in range(1, order+1)):
+            troughs.append(i)
+    return peaks, troughs
+
+def detect_rsi_divergence(close, rsi, lookback=50):
+    """
+    检测 RSI 顶背离和底背离
+    返回 (顶背离信息, 底背离信息)
+    """
+    if len(close) < lookback:
+        lookback = len(close)
+    close_seg = close[-lookback:]
+    rsi_seg = rsi[-lookback:]
+    
+    price_peaks, price_troughs = find_peaks(close_seg, order=2)
+    rsi_peaks, rsi_troughs = find_peaks(rsi_seg, order=2)
+    
+    top_div = None
+    if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
+        last_price_peak = price_peaks[-1]
+        prev_price_peak = price_peaks[-2]
+        last_rsi_peak = rsi_peaks[-1]
+        prev_rsi_peak = rsi_peaks[-2]
+        if (close_seg[last_price_peak] > close_seg[prev_price_peak] and
+            rsi_seg[last_rsi_peak] < rsi_seg[prev_rsi_peak]):
+            top_div = f"⚠️ RSI顶背离：价格新高 ({close_seg[last_price_peak]:.2f})，RSI降低 ({rsi_seg[last_rsi_peak]:.1f})"
+    
+    bottom_div = None
+    if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
+        last_price_trough = price_troughs[-1]
+        prev_price_trough = price_troughs[-2]
+        last_rsi_trough = rsi_troughs[-1]
+        prev_rsi_trough = rsi_troughs[-2]
+        if (close_seg[last_price_trough] < close_seg[prev_price_trough] and
+            rsi_seg[last_rsi_trough] > rsi_seg[prev_rsi_trough]):
+            bottom_div = f"✅ RSI底背离：价格新低 ({close_seg[last_price_trough]:.2f})，RSI抬高 ({rsi_seg[last_rsi_trough]:.1f})"
+    
+    return top_div, bottom_div
+
+def detect_macd_divergence(close, macd_hist, lookback=50):
+    """检测 MACD 柱顶背离和底背离"""
+    if len(close) < lookback:
+        lookback = len(close)
+    close_seg = close[-lookback:]
+    macd_seg = macd_hist[-lookback:]
+    
+    price_peaks, price_troughs = find_peaks(close_seg, order=2)
+    macd_peaks, macd_troughs = find_peaks(macd_seg, order=2)
+    
+    top_div = None
+    if len(price_peaks) >= 2 and len(macd_peaks) >= 2:
+        last_pp = price_peaks[-1]
+        prev_pp = price_peaks[-2]
+        last_mp = macd_peaks[-1]
+        prev_mp = macd_peaks[-2]
+        if (close_seg[last_pp] > close_seg[prev_pp] and
+            macd_seg[last_mp] < macd_seg[prev_mp]):
+            top_div = f"⚠️ MACD顶背离：价格新高 ({close_seg[last_pp]:.2f})，MACD柱降低 ({macd_seg[last_mp]:.4f})"
+    
+    bottom_div = None
+    if len(price_troughs) >= 2 and len(macd_troughs) >= 2:
+        last_pt = price_troughs[-1]
+        prev_pt = price_troughs[-2]
+        last_mt = macd_troughs[-1]
+        prev_mt = macd_troughs[-2]
+        if (close_seg[last_pt] < close_seg[prev_pt] and
+            macd_seg[last_mt] > macd_seg[prev_mt]):
+            bottom_div = f"✅ MACD底背离：价格新低 ({close_seg[last_pt]:.2f})，MACD柱抬高 ({macd_seg[last_mt]:.4f})"
+    
+    return top_div, bottom_div
 
 # ========== 斐波那契函数 ==========
 
@@ -127,7 +219,7 @@ def get_price_position_relative_to_fib(current_price, fib_levels):
                 return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
     return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
-# ========== OKX 数据获取（使用 requests 直接调用 API） ==========
+# ========== OKX 数据获取 ==========
 
 def get_crypto_data(symbol, days=60):
     """
@@ -153,7 +245,6 @@ def get_crypto_data(symbol, days=60):
             return None
         
         # 数据格式: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
-        # 注意：返回的是倒序（最新在前），需要反转
         data.reverse()
         
         df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'vol',
@@ -161,7 +252,7 @@ def get_crypto_data(symbol, days=60):
         for col in ['open', 'high', 'low', 'close', 'vol']:
             df[col] = df[col].astype(float)
         
-        # 2. 获取实时 Ticker（最新价和 24h 涨跌幅）
+        # 2. 获取实时 Ticker
         ticker_response = requests.get('https://www.okx.com/api/v5/market/ticker', params={'instId': symbol})
         ticker_result = ticker_response.json()
         
@@ -172,16 +263,21 @@ def get_crypto_data(symbol, days=60):
         else:
             ticker = ticker_result['data'][0]
             current = float(ticker['last'])
-            # 注意：字段名是 'changePct'（大写 P）
             change_pct = float(ticker.get('changePct', 0))
         
         # 计算技术指标（基于日线）
         _, _, adx = calculate_adx(df['high'].values, df['low'].values, df['close'].values, period=14)
         current_adx = adx[-1] if len(adx) > 0 else 0
         
-        current_rsi = calculate_rsi(df['close'].values, period=14)
+        # 计算 RSI 序列和当前值
+        rsi_series = calculate_rsi_series(df['close'].values, period=14)
+        current_rsi = rsi_series[-1] if not np.isnan(rsi_series[-1]) else 50.0
+        
+        # 计算 MACD 柱序列和当前值
+        macd_series = calculate_macd_series(df['close'].values)
+        current_macd_hist = macd_series[-1] if not np.isnan(macd_series[-1]) else 0.0
+        
         bb_width = calculate_bollinger_width(df['close'].values, period=20)
-        macd_hist = calculate_macd(df['close'].values)
         
         ma20 = df['close'].tail(20).mean()
         ma60 = df['close'].tail(60).mean()
@@ -196,6 +292,17 @@ def get_crypto_data(symbol, days=60):
         )
         fib_position, fib_advice = get_price_position_relative_to_fib(current, fib_levels)
         
+        # 背离检测（需要足够的数据）
+        rsi_top_div, rsi_bottom_div = None, None
+        macd_top_div, macd_bottom_div = None, None
+        if len(df) >= 30:
+            rsi_top_div, rsi_bottom_div = detect_rsi_divergence(
+                df['close'].values, rsi_series, lookback=50
+            )
+            macd_top_div, macd_bottom_div = detect_macd_divergence(
+                df['close'].values, macd_series, lookback=50
+            )
+        
         return {
             "symbol": symbol,
             "current": round(current, 2),
@@ -203,7 +310,7 @@ def get_crypto_data(symbol, days=60):
             "adx": round(current_adx, 2),
             "rsi": round(current_rsi, 1),
             "bb_width": round(bb_width, 2),
-            "macd_hist": round(macd_hist, 4),
+            "macd_hist": round(current_macd_hist, 4),
             "ma20": round(ma20, 2),
             "ma60": round(ma60, 2),
             "price_above_ma20": current > ma20,
@@ -214,7 +321,11 @@ def get_crypto_data(symbol, days=60):
             "fib_position": fib_position,
             "fib_advice": fib_advice,
             "swing_high": swing_high,
-            "swing_low": swing_low
+            "swing_low": swing_low,
+            "rsi_top_div": rsi_top_div,
+            "rsi_bottom_div": rsi_bottom_div,
+            "macd_top_div": macd_top_div,
+            "macd_bottom_div": macd_bottom_div,
         }
     except Exception as e:
         print(f"获取 {symbol} 数据失败: {e}")
@@ -291,6 +402,20 @@ def generate_action_advice(data):
         bearish += 1
         signals.append("接近斐波那契阻力")
     
+    # 背离信号加分
+    if data.get('rsi_bottom_div'):
+        bullish += 1
+        signals.append("RSI底背离")
+    if data.get('rsi_top_div'):
+        bearish += 1
+        signals.append("RSI顶背离")
+    if data.get('macd_bottom_div'):
+        bullish += 1
+        signals.append("MACD底背离")
+    if data.get('macd_top_div'):
+        bearish += 1
+        signals.append("MACD顶背离")
+    
     if bb_width < 5:
         signals.append("变盘预警")
     
@@ -366,6 +491,26 @@ def main():
 ├─ 成交量: {data['vol_ratio']}倍均量
 └─ 均线: MA20=${data['ma20']:,.0f} | MA60=${data['ma60']:,.0f}
 
+📈 背离检测
+"""
+        # 添加背离信息
+        div_count = 0
+        if data.get('rsi_top_div'):
+            line += f"├─ {data['rsi_top_div']}\n"
+            div_count += 1
+        if data.get('rsi_bottom_div'):
+            line += f"├─ {data['rsi_bottom_div']}\n"
+            div_count += 1
+        if data.get('macd_top_div'):
+            line += f"├─ {data['macd_top_div']}\n"
+            div_count += 1
+        if data.get('macd_bottom_div'):
+            line += f"├─ {data['macd_bottom_div']}\n"
+            div_count += 1
+        if div_count == 0:
+            line += "├─ 未检测到明显背离\n"
+        
+        line += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 斐波那契 (30日高低点)
 {data['fib_type']}
