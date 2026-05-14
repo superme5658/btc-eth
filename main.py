@@ -82,7 +82,12 @@ def calculate_bollinger_width(close, period=20, std_dev=2):
 # ========== 背离检测函数 ==========
 
 def find_peaks(series, order=2):
-    """寻找局部极值点，返回 (峰值索引列表, 谷值索引列表)"""
+    """
+    简单寻找局部极值点
+    series: 一维数组
+    order: 左右各 order 个点进行比较
+    返回 (峰值索引列表, 谷值索引列表)
+    """
     peaks = []
     troughs = []
     n = len(series)
@@ -113,7 +118,7 @@ def detect_rsi_divergence(close, rsi, lookback=50):
         prev_rsi_peak = rsi_peaks[-2]
         if (close_seg[last_price_peak] > close_seg[prev_price_peak] and
             rsi_seg[last_rsi_peak] < rsi_seg[prev_rsi_peak]):
-            top_div = f"WARNING RSI顶背离: 价格新高 ({close_seg[last_price_peak]:.2f}), RSI降低 ({rsi_seg[last_rsi_peak]:.1f})"
+            top_div = f"⚠️ RSI顶背离：价格新高 ({close_seg[last_price_peak]:.2f})，RSI降低 ({rsi_seg[last_rsi_peak]:.1f})"
     
     bottom_div = None
     if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
@@ -123,7 +128,7 @@ def detect_rsi_divergence(close, rsi, lookback=50):
         prev_rsi_trough = rsi_troughs[-2]
         if (close_seg[last_price_trough] < close_seg[prev_price_trough] and
             rsi_seg[last_rsi_trough] > rsi_seg[prev_rsi_trough]):
-            bottom_div = f"GOOD RSI底背离: 价格新低 ({close_seg[last_price_trough]:.2f}), RSI抬高 ({rsi_seg[last_rsi_trough]:.1f})"
+            bottom_div = f"✅ RSI底背离：价格新低 ({close_seg[last_price_trough]:.2f})，RSI抬高 ({rsi_seg[last_rsi_trough]:.1f})"
     
     return top_div, bottom_div
 
@@ -145,7 +150,7 @@ def detect_macd_divergence(close, macd_hist, lookback=50):
         prev_mp = macd_peaks[-2]
         if (close_seg[last_pp] > close_seg[prev_pp] and
             macd_seg[last_mp] < macd_seg[prev_mp]):
-            top_div = f"WARNING MACD顶背离: 价格新高 ({close_seg[last_pp]:.2f}), MACD柱降低 ({macd_seg[last_mp]:.4f})"
+            top_div = f"⚠️ MACD顶背离：价格新高 ({close_seg[last_pp]:.2f})，MACD柱降低 ({macd_seg[last_mp]:.4f})"
     
     bottom_div = None
     if len(price_troughs) >= 2 and len(macd_troughs) >= 2:
@@ -155,7 +160,7 @@ def detect_macd_divergence(close, macd_hist, lookback=50):
         prev_mt = macd_troughs[-2]
         if (close_seg[last_pt] < close_seg[prev_pt] and
             macd_seg[last_mt] > macd_seg[prev_mt]):
-            bottom_div = f"GOOD MACD底背离: 价格新低 ({close_seg[last_pt]:.2f}), MACD柱抬高 ({macd_seg[last_mt]:.4f})"
+            bottom_div = f"✅ MACD底背离：价格新低 ({close_seg[last_pt]:.2f})，MACD柱抬高 ({macd_seg[last_mt]:.4f})"
     
     return top_div, bottom_div
 
@@ -187,12 +192,12 @@ def calculate_fibonacci_levels(high, low, lookback=30):
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
             fib_levels[name] = round(swing_high - diff * ratio, 2)
-        fib_type = "[上升趋势] 斐波那契回撤位"
+        fib_type = "📈 斐波那契回撤位 (上升趋势)"
     else:
         diff = swing_high - swing_low
         for ratio, name in zip(ratios, names):
             fib_levels[name] = round(swing_low + diff * ratio, 2)
-        fib_type = "[下降趋势] 斐波那契反弹位"
+        fib_type = "📉 斐波那契反弹位 (下降趋势)"
     return fib_levels, fib_type, swing_high, swing_low
 
 def get_price_position_relative_to_fib(current_price, fib_levels):
@@ -201,18 +206,21 @@ def get_price_position_relative_to_fib(current_price, fib_levels):
     for i, (ratio, price) in enumerate(items):
         if current_price < price:
             if i == 0:
-                return f"低于 {items[0][0]}% 支撑位", "极端低位，强支撑区域"
+                return f"🔻 低于 {items[0][0]}% 支撑位", "极端低位，强支撑区域"
             prev_ratio, prev_price = items[i-1]
             if abs(current_price - prev_price) < abs(current_price - price):
-                return f"位于 {prev_ratio}% - {ratio}% 之间，靠近 {prev_ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
+                return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {prev_ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
             else:
-                return f"位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
-    return f"高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
+                return f"📍 位于 {prev_ratio}% - {ratio}% 之间，靠近 {ratio}%", f"支撑/阻力参考: {prev_price:.0f} - {price:.0f}"
+    return f"🔺 高于 {items[-1][0]}% 阻力位", "极端高位，强阻力区域"
 
-# ========== OKX 数据获取 ==========
+# ========== OKX 数据获取（支持多周期） ==========
 
 def get_crypto_data(symbol, bar='1D', limit=300):
-    """通用数据获取函数，支持 bar='1D', '4H', '1H' 等"""
+    """
+    通用数据获取函数
+    bar: K线周期，支持 '1D', '4H', '1H' 等
+    """
     try:
         params = {
             'instId': symbol,
@@ -345,29 +353,29 @@ def get_crypto_data_with_fib(symbol):
 
 def judge_bb_width_status(width):
     if width < 5:
-        return "极度压缩", "波动率极低，即将变盘"
+        return "⏸️ 极度压缩", "波动率极低，即将变盘"
     elif width < 10:
-        return "低波动", "震荡持续，注意突破"
+        return "📉 低波动", "震荡持续，注意突破"
     elif width < 20:
-        return "正常波动", "趋势可能延续"
+        return "📊 正常波动", "趋势可能延续"
     else:
-        return "高波动", "风险加大，严格止损"
+        return "⚠️ 高波动", "风险加大，严格止损"
 
 def judge_macd_status(macd_hist):
     if macd_hist > 0:
-        return "强劲多头动能" if macd_hist > 100 else "多头动能"
+        return "🟢 强劲多头动能" if macd_hist > 100 else "📗 多头动能"
     else:
-        return "强劲空头动能" if macd_hist < -100 else "空头动能"
+        return "🔴 强劲空头动能" if macd_hist < -100 else "📘 空头动能"
 
 def judge_rsi_status(rsi):
     if rsi >= 70:
-        return "超买区", "注意回调风险，谨慎追高"
+        return "🔴 超买区", "注意回调风险，谨慎追高"
     elif rsi <= 30:
-        return "超卖区", "可能反弹，关注买入机会"
+        return "🟢 超卖区", "可能反弹，关注买入机会"
     elif rsi >= 50:
-        return "强势区", "多头占优"
+        return "📗 强势区", "多头占优"
     else:
-        return "弱势区", "空头占优"
+        return "📘 弱势区", "空头占优"
 
 def generate_action_advice(daily_data, h4_data):
     """综合日线和4小时线信号给出建议"""
@@ -375,6 +383,7 @@ def generate_action_advice(daily_data, h4_data):
     rsi = daily_data['rsi']
     bb_width = daily_data['bb_width']
     macd_hist = daily_data['macd_hist']
+    price = daily_data['current']
     
     bullish = 0
     bearish = 0
@@ -406,7 +415,7 @@ def generate_action_advice(daily_data, h4_data):
         bearish += 1
         signals.append("日线MACD-")
     
-    # 4小时线信号
+    # 4小时线信号加分
     if h4_data:
         h4_adx = h4_data['adx']
         h4_macd = h4_data['macd_hist']
@@ -468,16 +477,16 @@ def generate_action_advice(daily_data, h4_data):
     signal_summary = " | ".join(signals)
     
     if bullish >= 3:
-        return f"[强烈做多] ({signal_summary})", "顺势持仓，回调至斐波那契支撑位加仓"
+        return f"✅ 强烈做多 ({signal_summary})", "顺势持仓，回调至斐波那契支撑位加仓"
     if bearish >= 3:
-        return f"[强烈做空] ({signal_summary})", "顺势做空，反弹至斐波那契阻力位加仓"
+        return f"❌ 强烈做空 ({signal_summary})", "顺势做空，反弹至斐波那契阻力位加仓"
     if bullish >= 2:
-        return f"[偏多] ({signal_summary})", "轻仓试多，设好止损"
+        return f"📈 偏多 ({signal_summary})", "轻仓试多，设好止损"
     if bearish >= 2:
-        return f"[偏空] ({signal_summary})", "轻仓试空，设好止损"
+        return f"📉 偏空 ({signal_summary})", "轻仓试空，设好止损"
     if bb_width < 5:
-        return f"[变盘预警] ({signal_summary})", "减小仓位，等待方向明确"
-    return f"[观望] ({signal_summary})", "多空信号不明确，等待共振"
+        return f"⚡ 变盘预警 ({signal_summary})", "减小仓位，等待方向明确"
+    return f"➡️ 观望 ({signal_summary})", "多空信号不明确，等待共振"
 
 def format_divergence_section(data, title):
     """格式化背离信息"""
@@ -511,18 +520,13 @@ def format_tech_section(data, title):
     macd_status = judge_macd_status(data['macd_hist'])
     bb_status, _ = judge_bb_width_status(data['bb_width'])
     
-    if data['adx'] > 25:
-        adx_status = '趋势'
-    elif data['adx'] < 20:
-        adx_status = '震荡'
-    else:
-        adx_status = '过渡'
+    adx_status = '🔥 趋势' if data['adx'] > 25 else '🌀 震荡' if data['adx'] < 20 else '⚡ 过渡'
     
     return f"""  {title}:
-    ADX: {data['adx']} -> {adx_status}
-    RSI: {data['rsi']} -> {rsi_status}
-    MACD柱: {data['macd_hist']:.4f} -> {macd_status}
-    布林带宽度: {data['bb_width']}% -> {bb_status}
+    ADX: {data['adx']} → {adx_status}
+    RSI: {data['rsi']} → {rsi_status}
+    MACD柱: {data['macd_hist']:.4f} → {macd_status}
+    布林带宽度: {data['bb_width']}% → {bb_status}
     成交量: {data['vol_ratio']}倍均量
     均线: MA20=${data['ma20']:,.0f} | MA60=${data['ma60']:,.0f}"""
 
@@ -537,7 +541,7 @@ def send_to_feishu(message):
         "content": {
             "post": {
                 "zh_cn": {
-                    "title": f"加密货币技术分析 (OKX数据) | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    "title": f"📊 加密货币技术分析 (OKX数据) | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                     "content": [[{"tag": "text", "text": message}]]
                 }
             }
@@ -569,7 +573,7 @@ def main():
         # 获取日线数据（含斐波那契）
         daily_data = get_crypto_data_with_fib(symbol)
         if not daily_data:
-            report_lines.append(f"\n[ERROR] {name} 日线数据获取失败")
+            report_lines.append(f"\n❌ 【{name}】日线数据获取失败")
             continue
         
         # 获取4小时线数据
@@ -580,32 +584,32 @@ def main():
         
         # 构建报告
         line = f"""
-==================================
-{name} | {symbol}
-==================================
-现价: ${daily_data['current']:,.0f}  |  {daily_data['change_pct']:+.2f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 {name} | {symbol}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 现价: ${daily_data['current']:,.0f}  |  {daily_data['change_pct']:+.2f}%
 
-==================================
-技术指标
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 技术指标
 {format_tech_section(daily_data, '日线')}
 {format_tech_section(h4_data, '4小时') if h4_data else '  4小时: 数据获取失败'}
 
-==================================
-背离检测
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 背离检测
 {format_divergence_section(daily_data, '日线')}
 {format_divergence_section(h4_data, '4小时') if h4_data else '  4小时: 数据获取失败'}
 
-==================================
-斐波那契 (日线30日高低点)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 斐波那契 (日线30日高低点)
 {daily_data['fib_type']}
 {format_fib_levels(daily_data.get('fib_levels', {}))}
-当前: {daily_data['fib_position']}
-{daily_data['fib_advice']}
+📌 当前: {daily_data['fib_position']}
+💡 {daily_data['fib_advice']}
 
-==================================
-综合信号: {signal_summary}
-操作建议: {action_detail}
-==================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 综合信号: {signal_summary}
+💡 操作建议: {action_detail}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
         report_lines.append(line)
         print(line)
